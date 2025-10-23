@@ -953,50 +953,7 @@ class modify_material(bpy.types.Operator):
         width, height = 1,1
 
         # Load image and LUT image pixels into array
-        image_pixels = numpy.array([color['r'], color['g'], color['b'], 1]).reshape(height, width, 4)
-        lut_pixels = numpy.array(bpy.data.images['Lut_TimeDay.png'].pixels[:]).reshape(bpy.data.images['Lut_TimeDay.png'].size[1], bpy.data.images['Lut_TimeDay.png'].size[0], 4)
-        
-        #constants to ensure bot and top are within the 32 x 1024 dimensions of the lut
-        coord_scale = numpy.array([0.0302734375, 0.96875, 31.0])
-        coord_offset = numpy.array([0.5/1024, 0.5/32, 0.0])
-        texel_height_X0 = numpy.array([1/32, 0])
-
-        # Find the XY coordinates of the LUT image needed to saturate each pixel
-        coord = image_pixels[:, :, :3] * coord_scale + coord_offset
-        coord_frac, coord_floor = numpy.modf(coord)
-        coord_bot = coord[:, :, :2] + numpy.tile(coord_floor[:, :, 2].reshape(height, width, 1), (1, 1, 2)) * texel_height_X0
-        coord_top = numpy.clip(coord_bot + texel_height_X0, 0, 1)
-
-        def bilinear_interpolation(lut_pixels, coords):
-            h, w, _ = lut_pixels.shape
-            x = coords[:, :, 0] * (w - 1)
-            #Fudge x coordinates based on x position. subtract -0.5 if at x position 0 and add 0.5 if at x position 1024 of the LUT. 
-            #this helps with some kind of overflow / underflow issue where it reads from the next LUT square when it's not supposed to
-            x = x + (x/1024  - 0.5)
-            y = coords[:, :, 1] * (h - 1)
-            # Get integer and fractional parts of each coordinate. 
-            # Also make sure each coordinate is clipped to the LUT image bounds
-            x0 = numpy.clip(numpy.floor(x).astype(int), 0, w-1)
-            x1 = numpy.clip(x0 + 1, 0, w - 1)
-            y0 = numpy.clip(numpy.floor(y).astype(int), 0, h-1)
-            y1 = numpy.clip(y0 + 1, 0, h - 1)
-            x_frac = x - x0
-            y_frac = y - y0
-            # Get the pixel values at four corners of this coordinate
-            f00 = lut_pixels[y0, x0]
-            f01 = lut_pixels[y1, x0]
-            f10 = lut_pixels[y0, x1]
-            f11 = lut_pixels[y1, x1]
-            # Perform the bilinear interpolation using the fractional part of each coordinate
-            # This will ensure the LUT can provide the correct color every single time, even if that color isn't found in the LUT itself
-            # If this isn't performed, the resulting image will look very blocky because it will snap to colors only found in the LUT.
-            lut_col_bot = f00 * (1 - y_frac)[:, :, numpy.newaxis] + f01 * y_frac[:, :, numpy.newaxis]
-            lut_col_top = f10 * (1 - y_frac)[:, :, numpy.newaxis] + f11 * y_frac[:, :, numpy.newaxis]
-            interpolated_colors = lut_col_bot * (1 - x_frac)[:, :, numpy.newaxis] + lut_col_top * x_frac[:, :, numpy.newaxis]
-            return interpolated_colors
-
-        lutcol_bot = bilinear_interpolation(lut_pixels, coord_bot)
-        lutcol_top = bilinear_interpolation(lut_pixels, coord_top)
+        image_pixels = numpy.array([color['r'], color['g'], color['b'], color['a']]).reshape(height, width, 4)
         #After the older gpu code uses the texture lookup the colorspace is converted from srgb to linear,
         # so replicate that behavior here.
         def srgb_to_linear(srgb):
@@ -1005,14 +962,12 @@ class modify_material(bpy.types.Operator):
                 srgb / 12.92,
                 numpy.power((srgb + 0.055) / 1.055, 2.4))
             return linear_rgb
-        lutcol_bot = srgb_to_linear(lutcol_bot)
-        lutcol_top = srgb_to_linear(lutcol_top)
-        lut_colors = lutcol_bot * (1 - coord_frac[:, :, 2].reshape(height, width, 1)) + lutcol_top * coord_frac[:, :, 2].reshape(height, width, 1)
-        image_pixels[:, :, :3] = lut_colors[:,:,:3]
+        image_pixels[:, :, :3] = srgb_to_linear(image_pixels[:,:,:3])
 
         return image_pixels.flatten().tolist()[0:4]
 
     def saturate_texture(self, image: bpy.types.Image) -> bpy.types.Image:
+        return image
         '''The Secret Sauce. Accepts a bpy image and saturates it to match the in-game look.'''
         width, height = image.size
         # Load image and LUT image pixels into array
